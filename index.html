@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SWA Windapp – Urk</title>
+<script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+<style>
+:root{
+  --brand:#E71C1F;
+  --brand-dark:#000000;
+  --bg:#f4f4f4;
+  --font:"Inter",system-ui,Helvetica,Arial,sans-serif;
+}
+body{font-family:var(--font);background:var(--bg);}
+</style>
+</head>
+<body class="min-h-screen flex flex-col items-center p-4">
+
+<header class="w-full max-w-md text-center mb-6">
+  <img src="Logo.png" alt="SWA-logo" class="mx-auto mb-2" style="max-height:110px;width:auto;object-fit:contain">
+  <h1 class="text-3xl font-bold tracking-tight" style="color:var(--brand)">SWA Windapp</h1>
+  <p class="text-sm text-slate-600">Wind • <strong>Urk</strong> – live + 8&nbsp;u forecast</p>
+</header>
+
+<section id="current" class="w-full max-w-md bg-white rounded-2xl shadow p-4 mb-4 flex flex-col items-center gap-1">
+  <h2 class="font-semibold" style="color:var(--brand)">Huidig <span id="currTime" class="text-xs text-slate-500"></span></h2>
+  <p id="currWind"  class="text-2xl font-bold">–</p>
+  <p id="currGust"  class="text-sm font-semibold" style="color:var(--brand)">– kn</p>
+  <p id="modelGust" class="text-xs font-semibold text-slate-600">Model gust: – kn</p>
+  <p id="currDir"   class="uppercase tracking-widest text-sm text-slate-600">–</p>
+</section>
+
+<section class="w-full max-w-md">
+  <div class="grid grid-cols-4 gap-2 text-center text-xs font-semibold text-white">
+    <div class="py-1 rounded-t-lg" style="background:var(--brand-dark)">Tijd</div>
+    <div class="py-1 rounded-t-lg" style="background:var(--brand-dark)">Weer</div>
+    <div id="h2label" class="py-1 rounded-t-lg" style="background:var(--brand-dark)">ICON-D2</div>
+    <div id="h3label" class="py-1 rounded-t-lg" style="background:var(--brand-dark)">HARM-NL</div>
+  </div>
+  <div id="forecastRows" class="grid grid-cols-4 gap-2 text-center bg-white rounded-b-2xl shadow"></div>
+</section>
+
+<p id="err" class="hidden mt-6 text-sm text-red-600 text-center max-w-md"></p>
+
+<footer class="mt-6 text-[10px] text-slate-500">
+  Weerdata: KNMI via <a href="https://weerlive.nl" class="underline">Weerlive</a> • Forecast via <a href="https://open-meteo.com" class="underline">Open-Meteo</a>
+</footer>
+
+<script>
+(()=>{
+/* ---------- CONFIG (Urk) ---------- */
+const WEERLIVE_KEY = "320a946057";   // ← jouw Weerlive-key
+const LIVE_LOC     = "Urk";
+
+const lat = 52.662,   // Urk 52.662° N
+      lon = 5.604,    // Urk 5.604° E
+      tz  = "Europe/Amsterdam",
+      HOURS = 8;
+
+const ICON = "icon_d2";
+const HARM = "knmi_harmonie_arome_netherlands";
+h2label.textContent = "ICON-D2";
+h3label.textContent = "HARM-NL";
+
+/* ---------- HELPERS ---------- */
+const errMsg = m => { err.textContent = m; err.classList.remove("hidden"); };
+
+const deg2card = d=>{
+  const dirs=["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+  return dirs[Math.round(d/22.5)%16];
+};
+const hhmm   = s => s.slice(11,16);
+const emo = c=>{
+  if([0].includes(c)) return "☀️";
+  if([1].includes(c)) return "🌤️";
+  if([2].includes(c)) return "⛅";
+  if([3].includes(c)) return "☁️";
+  if([45,48].includes(c)) return "🌫️";
+  if([51,53,55,56,57,61,63,65,66,67,80,81,82].includes(c)) return "🌧️";
+  if([71,73,75,77,85,86].includes(c)) return "❄️";
+  if([95,96,99].includes(c)) return "⛈️";
+  return "❓";
+};
+
+/* ---------- URLS ---------- */
+const wlURL = `https://weerlive.nl/api/weerlive_api_v2.php?key=${WEERLIVE_KEY}&locatie=${encodeURIComponent(LIVE_LOC)}`;
+const omLiveURL = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&hourly=wind_gusts_10m&wind_speed_unit=kn&forecast_hours=1&timezone=${tz}`;
+const wxURL = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=weathercode&forecast_hours=${HOURS}&timezone=${tz}`;
+const fcURL = m => `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=kn&forecast_hours=${HOURS}&models=${m}&timezone=${tz}`;
+
+/* ---------- MAIN ---------- */
+(async()=>{
+  /* 1. Live blok */
+  let v,gust,dirDeg,timeTxt;
+  try{
+    const [wl,om] = await Promise.all([
+      fetch(wlURL).then(r=>r.json()),
+      fetch(omLiveURL).then(r=>r.json())
+    ]);
+
+    const live = wl.liveweer?.[0];
+    if(live){
+      v = Math.round(parseFloat(live.windknp));
+      const g = parseFloat(live.windknpmax);
+      if(!Number.isNaN(g)) gust = Math.round(g);
+      timeTxt = live.time;
+    }
+
+    dirDeg = om.current_weather.winddirection;
+    if(!gust) gust = Math.round(om.hourly.wind_gusts_10m[0]);
+    if(!v)    v    = Math.round(om.current_weather.windspeed);
+    if(!timeTxt) timeTxt = hhmm(om.current_weather.time);
+
+  }catch(e){ errMsg("Live-data niet beschikbaar"); console.error(e); }
+
+  /* 2. Forecast (en model-gust) */
+  try{
+    const [wx,fIcon,fHarm] = await Promise.all([
+      fetch(wxURL).then(r=>r.json()),
+      fetch(fcURL(ICON)).then(r=>r.json()),
+      fetch(fcURL(HARM)).then(r=>r.json())
+    ]);
+
+    /* model gust voor volgende uur */
+    const modelG = Math.round(fIcon.hourly.wind_gusts_10m[0] ?? fHarm.hourly.wind_gusts_10m[0]);
+    modelGust.textContent = `Model gust: ${modelG} kn`;
+
+    /* vul live-blok */
+    if(v!==undefined){
+      currWind.textContent = `${v} kn`;
+      currGust.textContent = `${gust} kn`;
+      currDir.textContent  = deg2card(dirDeg);
+      currTime.textContent = `(${timeTxt})`;
+    }
+
+    /* tabel */
+    const rows = document.getElementById("forecastRows");
+    for(let i=0;i<HOURS;i++){
+      rows.insertAdjacentHTML("beforeend",`
+        <div class="py-1 border-b">${hhmm(fIcon.hourly.time[i])}</div>
+        <div class="py-1 border-b">${emo(wx.hourly.weathercode[i])}</div>
+        ${[fIcon,fHarm].map(f=>{
+          const vv = Math.round(f.hourly.wind_speed_10m[i]);
+          const gg = Math.round(f.hourly.wind_gusts_10m[i]);
+          const dd = deg2card(f.hourly.wind_direction_10m[i]);
+          return `<div class="py-1 border-b leading-tight">
+                    <span class="font-medium">${vv}</span>
+                    <span class="text-[10px] ml-1 text-slate-500">${dd}</span><br>
+                    <span class="text-xs font-semibold" style="color:var(--brand)">${gg}</span>
+                  </div>`;
+        }).join("")}
+      `);
+    }
+  }catch(e){ errMsg("Forecast niet beschikbaar"); console.error(e); }
+})();
+})();
+</script>
+</body>
+</html>
